@@ -1,71 +1,110 @@
 import os
 import json
 from typing import Dict, Any
-from openai import OpenAI
+import google.generativeai as genai
 
 class AIRiskAnalyzer:
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key or api_key == "fake-key-for-testing":
-            print("⚠️ Using fake API key, will use fallback analysis")
-            self.client = None
+        api_key = os.getenv("GOOGLE_API_KEY")
+
+        if not api_key or api_key.startswith("fake-"):
+            print("⚠️ No valid API key, will use fallback analysis")
+            self.model = None
         else:
             try:
-                self.client = OpenAI(api_key=api_key)
+                genai.configure(api_key=api_key)
+                self.model = genai.GenerativeModel('gemini-2.5-flash')
+                print("Google Gemini initialized successfully")
             except Exception as e:
-                print(f"Failed to initialize OpenAI client: {e}")
-                self.client = None
+                print(f"Failed to initialize Gemini: {e}")
+                self.model = None
 
     def analyze_feature_flag(self, flag_data: Dict[str, Any]) -> Dict[str, Any]:
-        if not self.client:
-            print("🔄 No valid OpenAI client, using fallback analysis")
+        """
+        Using Google Gemini to analyze feature flag risk
+        """
+        if not self.model:
+            print("Using fallback analysis")
             return self._fallback_analysis(flag_data)
 
         try:
-            prompt = f"""You are an expert software engineering risk analyst. Analyze the following feature flag submission:
+            prompt = self._build_prompt(flag_data)
 
-Feature Flag Details:
-- Name: {flag_data.get("name", "")}
-- Description: {flag_data.get("description", "")}
-- Scope: {flag_data.get("scope", "")}
-- Code Changes: {flag_data.get("code_changes", "")}
-- Configuration: {json.dumps(flag_data.get("config", {}))}
+            response = self.model.generate_content(prompt)
 
-Respond ONLY with valid JSON:
-{{
-    "risk_level": "low|medium|high|critical",
-    "risk_score": 0-100,
-    "detected_issues": ["issue1", "issue2"],
-    "ai_reasoning": "detailed explanation",
-    "recommendation": "approval recommendation"
-}}"""
+            result = self._parse_response(response.text)
 
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are an expert software engineering risk analyst."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=1000
-            )
-
-            result_text = response.choices[0].message.content
-            result = self._parse_response(result_text)
-            print("✅ AI analysis successful")
+            print(f"AI Analysis successful: {result['risk_level']} risk, score {result['risk_score']}")
             return result
 
         except Exception as e:
-            print(f"❌ AI Analysis Error: {str(e)}")
+            print(f"AI Analysis failed: {str(e)}")
             return self._fallback_analysis(flag_data)
 
+    def _build_prompt(self, flag_data: Dict[str, Any]) -> str:
+        """
+        Create Prompts
+        """
+        return f"""You are an expert software engineering risk analyst.
+
+Analyze this feature flag submission for potential risks:
+
+**Feature Flag Information:**
+- Name: {flag_data.get('name', '')}
+- Description: {flag_data.get('description', '')}
+- Scope: {flag_data.get('scope', '')} (frontend/backend/database/all systems)
+- Code Changes: {flag_data.get('code_changes', '')}
+- Configuration: {json.dumps(flag_data.get('config', {}))}
+
+**Your Task:**
+Assess the risk level and provide detailed analysis.
+
+**Risk Factors to Consider:**
+1. System Impact: Does it affect critical systems (payment, auth, database)?
+2. Data Safety: Any risk of data loss or corruption?
+3. Rollback Difficulty: How easy is it to revert if something goes wrong?
+4. User Impact: How many users affected? What's the blast radius?
+5. Technical Complexity: ML models, external integrations, schema changes?
+
+**Response Format:**
+Respond ONLY with valid JSON (no markdown, no explanation):
+
+{{
+    "risk_level": "low|medium|high|critical",
+    "risk_score": <number 0-100>,
+    "detected_issues": ["issue1", "issue2", "issue3"],
+    "ai_reasoning": "2-3 sentence explanation of why this risk level",
+    "recommendation": "Suggested approval process"
+}}
+
+**Risk Level Guidelines:**
+- low (0-29): Simple UI changes, non-critical features, easy rollback
+- medium (30-59): API changes, integrations, moderate complexity
+- high (60-74): Auth changes, database operations, payment systems
+- critical (75-100): Data migrations, security changes, multi-system impact
+
+**Examples:**
+- Dark mode toggle → low risk (UI only)
+- Email provider switch → medium risk (external integration)
+- Payment processor migration → critical risk (financial transactions)
+- Database schema change with DROP TABLE → critical risk (data loss)
+
+Now analyze the feature flag above:"""
+
     def _parse_response(self, response_text: str) -> Dict[str, Any]:
+
         try:
             clean_text = response_text.strip()
+
             if clean_text.startswith("```"):
-                clean_text = clean_text.split("```")[1]
-                if clean_text.startswith("json"):
-                    clean_text = clean_text[4:]
+                parts = clean_text.split("```")
+                if len(parts) >= 2:
+                    clean_text = parts[1]
+
+                    if clean_text.startswith("json"):
+                        clean_text = clean_text[4:]
+
+            clean_text = clean_text.strip()
 
             result = json.loads(clean_text)
 
@@ -74,8 +113,19 @@ Respond ONLY with valid JSON:
                 if field not in result:
                     raise ValueError(f"Missing required field: {field}")
 
+            valid_levels = ["low", "medium", "high", "critical"]
+            if result["risk_level"] not in valid_levels:
+                raise ValueError(f"Invalid risk_level: {result['risk_level']}")
+
+            if not 0 <= result["risk_score"] <= 100:
+                raise ValueError(f"Invalid risk_score: {result['risk_score']}")
+
             return result
 
+        except json.JSONDecodeError as e:
+            print(f"JSON Parse Error: {str(e)}")
+            print(f"Response text: {response_text[:500]}")
+            raise ValueError(f"Failed to parse AI response as JSON: {str(e)}")
         except Exception as e:
             print(f"Parse Error: {str(e)}")
             raise
@@ -88,115 +138,71 @@ Respond ONLY with valid JSON:
 
         all_text = f"{name} {scope} {code_changes} {description}"
 
-        print(f"\n🔍 Analyzing: {name}")
-        print(f"📝 Scope: {scope}")
+        print(f"\nFallback Analysis: {name}")
+        print(f"Scope: {scope}")
 
-        #  Critical:
         critical_keywords = {
-            "payment": 35,
-            "billing": 35,
-            "delete user": 40,
-            "delete data": 35,
-            "drop table": 45,
-            "production data": 40,
-            "user password": 35,
-            "credit card": 40,
+            "payment": 35, "billing": 35, "delete user": 40, "delete data": 35,
+            "drop table": 45, "production data": 40, "user password": 35, "credit card": 40,
         }
 
-        #  High:
         high_risk_keywords = {
-            "authentication": 25,
-            "security": 25,
-            "database schema": 25,
-            "migration": 25,
-            "alter table": 28,
-            "oauth": 20,
-            "redis": 12,
-            "cache": 10,
+            "authentication": 25, "security": 25, "database schema": 25, "migration": 25,
+            "alter table": 28, "oauth": 20, "redis": 12, "cache": 10,
         }
 
-        #  Medium:
         medium_risk_keywords = {
-            "database": 15,
-            "sql": 15,
-            "backend api": 12,
-            "third-party service": 12,
-            "external api": 12,
-            "webhook": 10,
-            "ml model": 15,
-            "tensorflow": 12,
-            "algorithm": 12,
+            "database": 15, "sql": 15, "backend api": 12, "third-party service": 12,
+            "external api": 12, "webhook": 10, "ml model": 15, "tensorflow": 12, "algorithm": 12,
         }
 
-        #  Low-Medium:
         routine_keywords = {
-            "api": 5,
-            "backend": 4,
-            "integration": 8,
-            "email": 6,
-            "notification": 5,
-            "template": 3,
-            "user": 3,
-            "data": 3,
-            "retry": 4,
-            "queue": 6,
-            "async": 5,
+            "api": 5, "backend": 4, "integration": 8, "email": 6, "notification": 5,
+            "template": 3, "user": 3, "data": 3, "retry": 4, "queue": 6, "async": 5,
         }
 
         detected_issues = []
         risk_score = 10
 
-        critical_found = 0
-        high_found = 0
-        medium_found = 0
-        routine_found = 0
+        critical_found = high_found = medium_found = routine_found = 0
 
         for keyword, weight in critical_keywords.items():
             if keyword in all_text:
                 detected_issues.append(f"critical_{keyword.replace(' ', '_')}")
                 risk_score += weight
                 critical_found += 1
-                print(f"   CRITICAL: '{keyword}' → +{weight} (total: {risk_score})")
+                print(f"  CRITICAL: '{keyword}' → +{weight}")
 
         for keyword, weight in high_risk_keywords.items():
             if keyword in all_text:
                 detected_issues.append(f"high_{keyword.replace(' ', '_')}")
                 risk_score += weight
                 high_found += 1
-                print(f"   HIGH: '{keyword}' → +{weight} (total: {risk_score})")
+                print(f"  HIGH: '{keyword}' → +{weight}")
 
         for keyword, weight in medium_risk_keywords.items():
             if keyword in all_text:
                 detected_issues.append(f"medium_{keyword.replace(' ', '_')}")
                 risk_score += weight
                 medium_found += 1
-                print(f"   MEDIUM: '{keyword}' → +{weight} (total: {risk_score})")
+                print(f"  MEDIUM: '{keyword}' → +{weight}")
 
         for keyword, weight in routine_keywords.items():
             if keyword in all_text:
                 detected_issues.append(f"routine_{keyword.replace(' ', '_')}")
                 risk_score += weight
                 routine_found += 1
-                print(f"   ROUTINE: '{keyword}' → +{weight} (total: {risk_score})")
 
-        # Scope 影响
-        if scope == "all" or scope == "all systems":
+        if scope in ["all", "all systems"]:
             risk_score += 15
             detected_issues.append("affects_all_systems")
-            print(f"   Scope 'all systems' → +15 (total: {risk_score})")
         elif scope == "database":
             risk_score += 20
             detected_issues.append("database_scope")
-            print(f"   Scope 'database' → +20 (total: {risk_score})")
 
         risk_score = min(risk_score, 100)
 
-        print(f"\n   Summary:")
-        print(f"     Critical keywords: {critical_found}")
-        print(f"     High keywords: {high_found}")
-        print(f"     Medium keywords: {medium_found}")
-        print(f"     Routine keywords: {routine_found}")
-        print(f"     Final Score: {risk_score}/100")
+        print(f"  Final Score: {risk_score}/100")
 
         if risk_score >= 75:
             risk_level = "critical"
