@@ -19,7 +19,7 @@ app.add_middleware(
     allow_origins=[
         FRONTEND_URL,
         "http://localhost:5173",
-        "https://ai-feature-flag-tool.vercel.app/",
+        "https://ai-feature-flag-tool.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
