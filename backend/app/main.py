@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.db.database import engine, Base
-from app.api import flags, approvals, runtime  # 新增 runtime
+from app.api import flags, approvals, runtime
+import os
 
-# Create database tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -12,26 +12,31 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS Configuration
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        FRONTEND_URL,
+        "http://localhost:5173",
+        "https://*.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers
 app.include_router(flags.router, prefix="/api/flags", tags=["flags"])
 app.include_router(approvals.router, prefix="/api/approvals", tags=["approvals"])
-app.include_router(runtime.router, prefix="/api/runtime", tags=["runtime"])  # 新增
+app.include_router(runtime.router, prefix="/api/runtime", tags=["runtime"])
 
 @app.get("/")
 async def root():
     return {
         "message": "Feature Flag System API",
         "docs": "/docs",
-        "health": "ok"
+        "health": "ok",
+        "environment": os.getenv("ENVIRONMENT", "development")
     }
 
 @app.get("/health")
