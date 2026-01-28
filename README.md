@@ -82,6 +82,7 @@ The output is advisory and meant to simulate how teams might integrate AI to ass
 ### Infrastructure
 
 - Docker & docker-compose for local development
+- Backend deployed on Railway
 - Deployed frontend on Vercel
 
 ---
