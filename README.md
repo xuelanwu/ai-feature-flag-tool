@@ -108,19 +108,6 @@ This will start both the backend API and frontend.
 
 ---
 
-## API Overview
-
-Examples of exposed endpoints:
-
-- `POST /flags` – submit a new feature flag
-- `GET /flags` – list flags with optional filters
-- `POST /flags/{id}/toggle` – activate or deactivate a flag
-- `GET /approvals` – list pending approvals
-- `POST /approvals/{id}` – approve or reject a submission
-
-These APIs are intended to be consumed by application code or internal tools acting as a feature flag client.
-
----
 
 ## Notes & Limitations
 
